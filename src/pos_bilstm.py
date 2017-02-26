@@ -41,9 +41,9 @@ class Model:
     ## Returns the mask that is 1 for the actual words
     ## and 0 for the padded part
     # Adapted from https://github.com/monikkinom/ner-lstm/blob/master/model.py __init__ function
-    def get_mask(self, t):
-        mask = tf.cast(tf.not_equal(t, -1), tf.int32)
-        lengths = tf.reduce_sum(mask, reduction_indices=1)
+    def get_mask(self, t): # (t - batch size * sequence length ?)
+        mask = tf.cast(tf.not_equal(t, -1), tf.int32) # (mask - batch size * sequence length ?)
+        lengths = tf.reduce_sum(mask, reduction_indices=1) # (lengths - batch size * 1 ?)
         return mask, lengths
 
     ## Embed the large one hot input vector into a smaller space
@@ -314,6 +314,16 @@ if __name__ == '__main__':
     X_train, y_train, _ = p.get_processed_data(train_mat, MAX_LENGTH)
     X_val, y_val, _ = p.get_processed_data(val_mat, MAX_LENGTH)
     X_test, y_test, _ = p.get_processed_data(test_mat, MAX_LENGTH)
+
+    # print len(train_mat)
+    # print train_mat
+    # print "\n"
+    # print len(X_train)
+    # print X_train
+    # print "\n"
+    # print len(y_train)
+    # print y_train
+    # print "\n"
 
     if experiment_type == 'train':
         if os.path.exists(train_dir):
