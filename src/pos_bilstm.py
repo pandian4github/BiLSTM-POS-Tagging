@@ -10,31 +10,54 @@ import itertools
 from datetime import datetime
 from random import shuffle
 from preprocess import PreprocessData
+from enum import Enum
 
 MAX_LENGTH = 100
 BATCH_SIZE = 128
 VALIDATION_FREQUENCY = 10
 CHECKPOINT_FREQUENCY = 50
 NO_OF_EPOCHS = 6
+ORTHOGRAPHIC_HIDDEN_STATE_SIZE=10
+
+class OrthographicInsertionPlace(Enum):
+    NONE = 0
+    INPUT = 1
+    OUTPUT = 2
+
+
+class OrthographicInsertionType(Enum):
+    ONE_HOT = 0
+    EMBEDDED = 1
+    INT_VALUES = 2
+
 
 # Returns formatted current time as string
 def get_time_string():
     return time.strftime('%c') + ' '
 
+
 ## Model class is adatepd from model.py found here
 ## https://github.com/monikkinom/ner-lstm/
 class Model:
-    def __init__(self, input_dim, sequence_len, output_dim,
-                 hidden_state_size=300):
+    def __init__(self, input_dim, prefix_orthographic_dim, suffix_orthographic_dim, sequence_len, output_dim,
+                 orthographic_insertion_place, orthographic_insertion_type, hidden_state_size=300,
+                 orthographic_hidden_state_size=ORTHOGRAPHIC_HIDDEN_STATE_SIZE):
         self._input_dim = input_dim
+        self._prefix_orthographic_dim = prefix_orthographic_dim
+        self._suffix_orthographic_dim = suffix_orthographic_dim
         self._sequence_len = sequence_len
         self._output_dim = output_dim
         self._hidden_state_size = hidden_state_size
+        self._orthographic_hidden_state_size = orthographic_hidden_state_size
+        self._orthographic_insertion_place = orthographic_insertion_place
+        self._orthographic_insertion_type = orthographic_insertion_type
         self._optimizer = tf.train.AdamOptimizer(0.0005)
 
     # Adapted from https://github.com/monikkinom/ner-lstm/blob/master/model.py __init__ function
     def create_placeholders(self):
         self._input_words = tf.placeholder(tf.int32, [BATCH_SIZE, self._sequence_len])
+        self._prefix_features = tf.placeholder(tf.int32, [BATCH_SIZE, self._sequence_len])
+        self._suffix_features = tf.placeholder(tf.int32, [BATCH_SIZE, self._sequence_len])
         self._output_tags = tf.placeholder(tf.int32, [BATCH_SIZE, self._sequence_len])
 
     def set_input_output(self, input_, output):
@@ -44,14 +67,15 @@ class Model:
     ## Returns the mask that is 1 for the actual words
     ## and 0 for the padded part
     # Adapted from https://github.com/monikkinom/ner-lstm/blob/master/model.py __init__ function
-    def get_mask(self, t): # (t - batch size * sequence length ?)
-        mask = tf.cast(tf.not_equal(t, -1), tf.int32) # (mask - batch size * sequence length ?)
-        lengths = tf.reduce_sum(mask, reduction_indices=1) # (lengths - batch size * 1 ?)
+    def get_mask(self, t):  # (t - batch size * sequence length ?)
+        mask = tf.cast(tf.not_equal(t, -1), tf.int32)  # (mask - batch size * sequence length ?)
+        lengths = tf.reduce_sum(mask, reduction_indices=1)  # (lengths - batch size * 1 ?)
         return mask, lengths
 
-    def get_oov_mask(self, t): # (t - batch size * sequence length ?)
-        mask = tf.cast(tf.equal(t, self._input_dim-2), tf.int32) # (mask: batch size * sequence length ?) # _input_dim - 2 is for 'unk', input_dim - 1 is for padding
-        lengths = tf.reduce_sum(mask, reduction_indices=1) # (lengths: batch size * 1 ?)
+    def get_oov_mask(self, t):  # (t - batch size * sequence length ?)
+        mask = tf.cast(tf.equal(t, self._input_dim - 2),
+                       tf.int32)  # (mask: batch size * sequence length ?) # _input_dim - 2 is for 'unk', input_dim - 1 is for padding
+        lengths = tf.reduce_sum(mask, reduction_indices=1)  # (lengths: batch size * 1 ?)
         return mask, lengths
 
     ## Embed the large one hot input vector into a smaller space
@@ -61,13 +85,16 @@ class Model:
                                     [self._input_dim, self._hidden_state_size], dtype=tf.float32)
         return tf.nn.embedding_lookup(embedding, tf.cast(input_, tf.int32))
 
+    ## Embed the large one hot input vector into a smaller space
+    ## to make the lstm learning tractable
+    def get_orthographic_embedding(self, input_, dimension):
+        embedding = tf.get_variable("embedding",
+                                    [dimension, self._orthographic_hidden_state_size], dtype=tf.float32)
+        return tf.nn.embedding_lookup(embedding, tf.cast(input_, tf.int32))
+
     # Adapted from https://github.com/monikkinom/ner-lstm/blob/master/model.py __init__ function
     def create_graph(self):
         self.create_placeholders()
-
-        ## Create forward and backward cell
-        forward_cell = tf.contrib.rnn.LSTMCell(self._hidden_state_size, state_is_tuple=True)
-        backward_cell = tf.contrib.rnn.LSTMCell(self._hidden_state_size, state_is_tuple=True)
 
         ## Since we are padding the input, we need to give
         ## the actual length of every instance in the batch
@@ -81,6 +108,26 @@ class Model:
         ## This is for computational tractability
         with tf.variable_scope("lstm_input"):
             lstm_input = self.get_embedding(self._input_words)
+            if self._orthographic_insertion_place == OrthographicInsertionPlace.INPUT:
+                if self._orthographic_insertion_type == OrthographicInsertionType.ONE_HOT:
+                    prefix_one_hot = tf.one_hot(self._prefix_features, self._prefix_orthographic_dim)
+                    suffix_one_hot = tf.one_hot(self._suffix_features, self._suffix_orthographic_dim)
+                    self._hidden_state_size += self._prefix_orthographic_dim + self._suffix_orthographic_dim
+                    lstm_input = tf.concat([lstm_input, prefix_one_hot, suffix_one_hot], axis=2)
+                elif self._orthographic_insertion_type == OrthographicInsertionType.INT_VALUES:
+                    prefix_reshaped = tf.reshape(self._prefix_features, [BATCH_SIZE, self._sequence_len, 1])
+                    suffix_reshaped = tf.reshape(self._suffix_features, [BATCH_SIZE, self._sequence_len, 1])
+                    self._hidden_state_size += 2
+                    lstm_input = tf.concat([lstm_input, prefix_reshaped, suffix_reshaped], axis=2)
+                elif self._orthographic_insertion_type == OrthographicInsertionType.EMBEDDED:
+                    prefix_embedded = self.get_orthographic_embedding(self._prefix_features, self._prefix_orthographic_dim)
+                    suffix_embedded = self.get_orthographic_embedding(self._suffix_features, self._suffix_orthographic_dim)
+                    self._hidden_state_size += self._orthographic_hidden_state_size * 2
+                    lstm_input = tf.concat([lstm_input, prefix_embedded, suffix_embedded], axis=2)
+
+        ## Create forward and backward cell
+        forward_cell = tf.contrib.rnn.LSTMCell(self._hidden_state_size, state_is_tuple=True)
+        backward_cell = tf.contrib.rnn.LSTMCell(self._hidden_state_size, state_is_tuple=True)
 
         ## Apply bidrectional dyamic rnn to get a tuple of forward
         ## and backward outputs. Using dynamic rnn instead of just
@@ -90,11 +137,27 @@ class Model:
             outputs, _ = tf.nn.bidirectional_dynamic_rnn(forward_cell, backward_cell,
                                                          lstm_input, dtype=tf.float32,
                                                          sequence_length=self._lengths)
+            # print outputs
 
         with tf.variable_scope("lstm_output"):
             ## concat forward and backward states
             outputs = tf.concat(outputs, 2)
 
+            if orthographic_insertion_place == OrthographicInsertionPlace.OUTPUT:
+                if self._orthographic_insertion_type == OrthographicInsertionType.ONE_HOT:
+                    prefix_one_hot = tf.one_hot(self._prefix_features, self._prefix_orthographic_dim)
+                    suffix_one_hot = tf.one_hot(self._suffix_features, self._suffix_orthographic_dim)
+                    outputs = tf.concat([outputs, prefix_one_hot, suffix_one_hot], axis=2)
+                elif self._orthographic_insertion_type == OrthographicInsertionType.INT_VALUES:
+                    prefix_reshaped = tf.reshape(self._prefix_features, [BATCH_SIZE, self._sequence_len, 1])
+                    suffix_reshaped = tf.reshape(self._suffix_features, [BATCH_SIZE, self._sequence_len, 1])
+                    outputs = tf.concat([outputs, prefix_reshaped, suffix_reshaped], axis=2)
+                elif self._orthographic_insertion_type == OrthographicInsertionType.EMBEDDED:
+                    prefix_embedded = self.get_orthographic_embedding(self._prefix_features, self._prefix_orthographic_dim)
+                    suffix_embedded = self.get_orthographic_embedding(self._suffix_features, self._suffix_orthographic_dim)
+                    outputs = tf.concat([outputs, prefix_embedded, suffix_embedded], axis=2)
+
+            # print outputs
             ## Apply linear transformation to get logits(unnormalized scores)
             logits = self.compute_logits(outputs)
 
@@ -104,6 +167,7 @@ class Model:
             ## different POS tags for each batch
             ## example at each time step
             self._probabilities = tf.nn.softmax(logits)
+            # print self._probabilities
 
         self._loss = self.cost(self._output_tags, self._probabilities)
         self._average_loss = self._loss / tf.cast(self._total_length, tf.float32)
@@ -112,8 +176,8 @@ class Model:
         self._average_accuracy = self._accuracy / tf.cast(self._total_length, tf.float32)
 
         self._oov_accuracy = self.compute_accuracy(self._output_tags, self._probabilities, self._oov_mask)
-        self._average_oov_accuracy = self._oov_accuracy / tf.cast(self._total_oov_length, tf.float32) if self._total_oov_length != 0 else 1.0
-
+        self._average_oov_accuracy = self._oov_accuracy / tf.cast(self._total_oov_length,
+                                                                  tf.float32) if self._total_oov_length != 0 else 1.0
 
     # Taken from https://github.com/monikkinom/ner-lstm/blob/master/model.py weight_and_bias function
     ## Creates a fully connected layer with the given dimensions and parameters
@@ -171,6 +235,14 @@ class Model:
         return -tf.reduce_sum(cross_entropy)
 
     @property
+    def prefix_features(self):
+        return self._prefix_features
+
+    @property
+    def suffix_features(self):
+        return self._suffix_features
+
+    @property
     def input_words(self):
         return self._input_words
 
@@ -200,36 +272,38 @@ class Model:
 
 
 # Adapted from http://r2rt.com/recurrent-neural-networks-in-tensorflow-i.html
-def generate_batch(X, y):
+def generate_batch(X, y, P, S):
     for i in xrange(0, len(X), BATCH_SIZE):
-        yield X[i:i + BATCH_SIZE], y[i:i + BATCH_SIZE]
+        yield X[i:i + BATCH_SIZE], y[i:i + BATCH_SIZE], P[i:i + BATCH_SIZE], S[i:i + BATCH_SIZE]
 
 
-def shuffle_data(X, y):
+def shuffle_data(X, y, P, S):
     ran = range(len(X))
     shuffle(ran)
-    return [X[num] for num in ran], [y[num] for num in ran]
+    return [X[num] for num in ran], [y[num] for num in ran], [P[num] for num in ran], [S[num] for num in ran]
 
 
 # Adapted from http://r2rt.com/recurrent-neural-networks-in-tensorflow-i.html
-def generate_epochs(X, y, no_of_epochs):
+def generate_epochs(X, y, P, S, no_of_epochs):
     lx = len(X)
     lx = (lx // BATCH_SIZE) * BATCH_SIZE
     X = X[:lx]
     y = y[:lx]
+    P = P[:lx]
+    S = S[:lx]
     for i in range(no_of_epochs):
-        shuffle_data(X, y)
-        yield generate_batch(X, y)
+        shuffle_data(X, y, P, S)
+        yield generate_batch(X, y, P, S)
 
 
 ## Compute overall loss and accuracy on dev/test data
-def compute_summary_metrics(sess, m, sentence_words_val, sentence_tags_val):
+def compute_summary_metrics(sess, m, sentence_words_val, sentence_tags_val, prefixes, suffixes):
     loss, accuracy, total_len, oov_accuracy, total_oov_len = 0.0, 0.0, 0, 0.0, 0
-    for i, epoch in enumerate(generate_epochs(sentence_words_val, sentence_tags_val, 1)):
-        for step, (X, y) in enumerate(epoch):
+    for i, epoch in enumerate(generate_epochs(sentence_words_val, sentence_tags_val, prefixes, suffixes, 1)):
+        for step, (X, y, P, S) in enumerate(epoch):
             batch_loss, batch_accuracy, batch_len, batch_oov_accuracy, batch_oov_len = \
                 sess.run([m.loss, m.accuracy, m.total_length, m.oov_accuracy, m.total_oov_length], \
-                         feed_dict={m.input_words: X, m.output_tags: y})
+                         feed_dict={m.input_words: X, m.output_tags: y, m.prefix_features: P, m.suffix_features: S})
             loss += batch_loss
             accuracy += batch_accuracy
             total_len += batch_len
@@ -243,9 +317,10 @@ def compute_summary_metrics(sess, m, sentence_words_val, sentence_tags_val):
 
 ## train and test adapted from https://github.com/tensorflow/tensorflow/blob/master/tensorflow/
 ## models/image/cifar10/cifar10_train.py and cifar10_eval.py
-def train(sentence_words_train, sentence_tags_train, sentence_words_val,
-          sentence_tags_val, vocab_size, no_pos_classes, train_dir):
-    m = Model(vocab_size, MAX_LENGTH, no_pos_classes)
+def train(sentence_words_train, sentence_tags_train, prefixes_train, suffixes_train, sentence_words_val,
+          sentence_tags_val, prefixes_val, suffixes_val, vocab_size, prefix_size, suffix_size, no_pos_classes,
+          train_dir, orthographic_insertion_place, orthographic_insertion_type):
+    m = Model(vocab_size, prefix_size, suffix_size, MAX_LENGTH, no_pos_classes, orthographic_insertion_place, orthographic_insertion_type)
     with tf.Graph().as_default():
         global_step = tf.Variable(0, trainable=False)
 
@@ -271,17 +346,20 @@ def train(sentence_words_train, sentence_tags_train, sentence_words_val,
         sess = tf.Session(config=tf.ConfigProto())
         sess.run(init)
 
+        # print prefixes_train
+        # print suffixes_train
         summary_writer = tf.summary.FileWriter(train_dir, sess.graph)
         j = 0
-        for i, epoch in enumerate(generate_epochs(sentence_words_train, sentence_tags_train, NO_OF_EPOCHS)):
+        for i, epoch in enumerate(generate_epochs(sentence_words_train, sentence_tags_train, prefixes_train, suffixes_train, NO_OF_EPOCHS)):
             start_time = time.time()
-            for step, (X, y) in enumerate(epoch):
+            for step, (X, y, P, S) in enumerate(epoch):
                 _, summary_value = sess.run([train_op, summary_op], feed_dict=
-                {m.input_words: X, m.output_tags: y})
+                {m.input_words: X, m.output_tags: y, m.prefix_features: P, m.suffix_features: S})
                 duration = time.time() - start_time
                 j += 1
                 if j % VALIDATION_FREQUENCY == 0:
-                    val_loss, val_accuracy, val_oov_accuracy = compute_summary_metrics(sess, m, sentence_words_val, sentence_tags_val)
+                    val_loss, val_accuracy, val_oov_accuracy = compute_summary_metrics(sess, m, sentence_words_val,
+                                                                                       sentence_tags_val, prefixes_val, suffixes_val)
                     summary = tf.Summary()
                     summary.ParseFromString(summary_value)
                     summary.value.add(tag='Validation Loss', simple_value=val_loss)
@@ -301,9 +379,10 @@ def train(sentence_words_train, sentence_tags_train, sentence_words_val,
 ## Check performance on held out test data
 ## Loads most recent model from train_dir
 ## and applies it on test data
-def test(sentence_words_test, sentence_tags_test,
-         vocab_size, no_pos_classes, train_dir):
-    m = Model(vocab_size, MAX_LENGTH, no_pos_classes)
+def test(sentence_words_test, sentence_tags_test, prefixes_test, suffixes_test,
+         vocab_size, prefix_size, suffix_size, no_pos_classes, train_dir,
+         orthographic_insertion_place, orthographic_insertion_type):
+    m = Model(vocab_size, prefix_size, suffix_size, MAX_LENGTH, no_pos_classes, orthographic_insertion_place, orthographic_insertion_type)
     with tf.Graph().as_default():
         global_step = tf.Variable(0, trainable=False)
         m.create_placeholders()
@@ -316,7 +395,7 @@ def test(sentence_words_test, sentence_tags_test,
 
                 global_step = ckpt.model_checkpoint_path.split('/')[-1].split('-')[-1]
             test_loss, test_accuracy, test_oov_accuracy = compute_summary_metrics(sess, m, sentence_words_test,
-                                                               sentence_tags_test)
+                                                                                  sentence_tags_test, prefixes_test, suffixes_test)
             print get_time_string(), 'Test Accuracy: {:.3f}'.format(test_accuracy)
             print get_time_string(), 'Test OOV Accuracy: {:.3f}'.format(test_oov_accuracy)
             print get_time_string(), 'Test Loss: {:.3f}'.format(test_loss)
@@ -327,6 +406,23 @@ if __name__ == '__main__':
     train_dir = sys.argv[2]
     split_type = sys.argv[3]
     experiment_type = sys.argv[4]
+
+    orthographic_insertion_place = 'NONE' if len(sys.argv) <= 5 else sys.argv[5]
+    orthographic_insertion_type = 'ONE_HOT' if len(sys.argv) <= 6 else sys.argv[6]
+
+    # OrthographicInsertionType orthographic_insertion_type(OrthographicInsertionType.NONE)
+    orthographic_insertion_place = OrthographicInsertionPlace[orthographic_insertion_place]
+    orthographic_insertion_type = OrthographicInsertionType[orthographic_insertion_type]
+
+    # if orthographic_insertion_place == 'NONE':
+    #     orthographic_insertion_place = OrthographicInsertionPlace.NONE
+    # elif orthographic_insertion_place == 'INPUT':
+    #     orthographic_insertion_place = OrthographicInsertionPlace.INPUT
+    # elif orthographic_insertion_place == 'OUTPUT':
+    #     orthographic_insertion_place = OrthographicInsertionPlace.OUTPUT
+    # else:
+    #     print 'Invalid orthographic insertion type! Please specify NONE/INPUT/OUTPUT.'
+    #     exit(1)
 
     p = PreprocessData(dataset_type='wsj')
 
@@ -343,14 +439,14 @@ if __name__ == '__main__':
     val_mat = p.get_raw_data(val_files, 'validation')
     test_mat = p.get_raw_data(test_files, 'test')
 
-    X_train, y_train, _ = p.get_processed_data(train_mat, MAX_LENGTH)
-    X_val, y_val, _ = p.get_processed_data(val_mat, MAX_LENGTH)
-    X_test, y_test, _ = p.get_processed_data(test_mat, MAX_LENGTH)
+    X_train, y_train, P_train, S_train, _ = p.get_processed_data(train_mat, MAX_LENGTH)
+    X_val, y_val, P_val, S_val, _ = p.get_processed_data(val_mat, MAX_LENGTH)
+    X_test, y_test, P_test, S_test, _ = p.get_processed_data(test_mat, MAX_LENGTH)
 
     if experiment_type == 'train':
         if os.path.exists(train_dir):
             shutil.rmtree(train_dir)
         os.mkdir(train_dir)
-        train(X_train, y_train, X_val, y_val, len(p.vocabulary) + 2, len(p.pos_tags) + 1, train_dir)
+        train(X_train, y_train, P_train, S_train, X_val, y_val, P_val, S_val, len(p.vocabulary) + 2, len(p.prefix_orthographic), len(p.suffix_orthographic), len(p.pos_tags) + 1, train_dir, orthographic_insertion_place, orthographic_insertion_type)
     else:
-        test(X_test, y_test, len(p.vocabulary) + 2, len(p.pos_tags) + 1, train_dir)
+        test(X_test, y_test, P_test, S_test, len(p.vocabulary) + 2, len(p.prefix_orthographic), len(p.suffix_orthographic), len(p.pos_tags) + 1, train_dir, orthographic_insertion_place, orthographic_insertion_type)
