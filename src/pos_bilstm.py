@@ -87,8 +87,8 @@ class Model:
 
     ## Embed the large one hot input vector into a smaller space
     ## to make the lstm learning tractable
-    def get_orthographic_embedding(self, input_, dimension):
-        embedding = tf.get_variable("embedding",
+    def get_orthographic_embedding(self, input_, dimension, embedding_var_name):
+        embedding = tf.get_variable(embedding_var_name,
                                     [dimension, self._orthographic_hidden_state_size], dtype=tf.float32)
         return tf.nn.embedding_lookup(embedding, tf.cast(input_, tf.int32))
 
@@ -117,11 +117,13 @@ class Model:
                 elif self._orthographic_insertion_type == OrthographicInsertionType.INT_VALUES:
                     prefix_reshaped = tf.reshape(self._prefix_features, [BATCH_SIZE, self._sequence_len, 1])
                     suffix_reshaped = tf.reshape(self._suffix_features, [BATCH_SIZE, self._sequence_len, 1])
+                    prefix_reshaped = tf.cast(prefix_reshaped, tf.float32)
+                    suffix_reshaped = tf.cast(suffix_reshaped, tf.float32)
                     self._hidden_state_size += 2
                     lstm_input = tf.concat([lstm_input, prefix_reshaped, suffix_reshaped], axis=2)
                 elif self._orthographic_insertion_type == OrthographicInsertionType.EMBEDDED:
-                    prefix_embedded = self.get_orthographic_embedding(self._prefix_features, self._prefix_orthographic_dim)
-                    suffix_embedded = self.get_orthographic_embedding(self._suffix_features, self._suffix_orthographic_dim)
+                    prefix_embedded = self.get_orthographic_embedding(self._prefix_features, self._prefix_orthographic_dim, "prefix_embedding")
+                    suffix_embedded = self.get_orthographic_embedding(self._suffix_features, self._suffix_orthographic_dim, "suffix_embedding")
                     self._hidden_state_size += self._orthographic_hidden_state_size * 2
                     lstm_input = tf.concat([lstm_input, prefix_embedded, suffix_embedded], axis=2)
 
@@ -151,10 +153,12 @@ class Model:
                 elif self._orthographic_insertion_type == OrthographicInsertionType.INT_VALUES:
                     prefix_reshaped = tf.reshape(self._prefix_features, [BATCH_SIZE, self._sequence_len, 1])
                     suffix_reshaped = tf.reshape(self._suffix_features, [BATCH_SIZE, self._sequence_len, 1])
+                    prefix_reshaped = tf.cast(prefix_reshaped, tf.float32)
+                    suffix_reshaped = tf.cast(suffix_reshaped, tf.float32)
                     outputs = tf.concat([outputs, prefix_reshaped, suffix_reshaped], axis=2)
                 elif self._orthographic_insertion_type == OrthographicInsertionType.EMBEDDED:
-                    prefix_embedded = self.get_orthographic_embedding(self._prefix_features, self._prefix_orthographic_dim)
-                    suffix_embedded = self.get_orthographic_embedding(self._suffix_features, self._suffix_orthographic_dim)
+                    prefix_embedded = self.get_orthographic_embedding(self._prefix_features, self._prefix_orthographic_dim, "prefix_embedding")
+                    suffix_embedded = self.get_orthographic_embedding(self._suffix_features, self._suffix_orthographic_dim, "suffix_embedding")
                     outputs = tf.concat([outputs, prefix_embedded, suffix_embedded], axis=2)
 
             # print outputs
@@ -410,9 +414,12 @@ if __name__ == '__main__':
     orthographic_insertion_place = 'NONE' if len(sys.argv) <= 5 else sys.argv[5]
     orthographic_insertion_type = 'ONE_HOT' if len(sys.argv) <= 6 else sys.argv[6]
 
+    # print OrthographicInsertionPlace[orthographic_insertion_place]
     # OrthographicInsertionType orthographic_insertion_type(OrthographicInsertionType.NONE)
     orthographic_insertion_place = OrthographicInsertionPlace[orthographic_insertion_place]
     orthographic_insertion_type = OrthographicInsertionType[orthographic_insertion_type]
+    # print orthographic_insertion_place
+    # print orthographic_insertion_type
 
     # if orthographic_insertion_place == 'NONE':
     #     orthographic_insertion_place = OrthographicInsertionPlace.NONE
