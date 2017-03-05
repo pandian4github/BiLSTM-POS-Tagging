@@ -70,8 +70,8 @@ class PreprocessData:
         unfeasibleChars = '[]@\n'
         return not (c in unfeasibleChars)
 
-    ## unknown words represented by len(vocab)
-    def get_unk_id(self, dic):
+    ## OOV words represented by len(vocab)
+    def get_oov_id(self, dic):
         return len(dic)
 
     def get_pad_id(self, dic):
@@ -97,13 +97,14 @@ class PreprocessData:
             if mode == 'train':
                 dic[pos] = len(dic)
             else:
-                return self.get_unk_id(dic)
+                return self.get_oov_id(dic)
         return dic[pos]
 
     ## Process single file to get raw data matrix
     def processSingleFile(self, inFileName, mode):
         matrix = []
         row = []
+        word_count = 0
         with open(inFileName) as f:
             lines = f.readlines()
             for line in lines:
@@ -117,17 +118,25 @@ class PreprocessData:
                         if token[0] == '=':
                             if row:
                                 matrix.append(row)
+                            word_count = 0
                             row = []
                             break
                         elif PreprocessData.isFeasibleStartingCharacter(token[0]):
                             wordPosPair = token.split('/')
-                            if len(wordPosPair) == 2:
-                                ## get ids for word and pos tag
+                            # The MAX_LENGTH check ensures that the training vocabularly
+                            # only includes in those words that are finally a part of the
+                            # training instance (not the clipped off portion)
+                            if len(wordPosPair) == 2 and word_count < MAX_LENGTH:
+                                word_count += 1
+                                ## get ids for word
                                 feature = self.get_id(wordPosPair[0], self.vocabulary, mode)
+
+                                # get ids for prefix and suffix features
                                 prefix_feature = self.get_prefix_feature_id(wordPosPair[0], mode)
                                 suffix_feature = self.get_suffix_feature_id(wordPosPair[0], mode)
-                                # print wordPosPair[0], prefix_feature, suffix_feature, wordPosPair[1]
-                                # include all pos tags.
+
+                                # get id for pos tag. Instead of passing input mode
+                                # we pass train as the mode so that we can include all pos tags
                                 row.append((feature, self.get_id(wordPosPair[1],
                                                                  self.pos_tags, 'train'), prefix_feature, suffix_feature))
         if row:
