@@ -6,12 +6,18 @@ MAX_LENGTH = 100
 prefixes_common = ['anti', 'ante', 'an', 'auto', 'bi', 'circum', 'contra', 'counter', 'de', 'dis', 'di', 'exo', 'extra', 'extro', 'fore', 'hemi', 'hyper', 'hypo', 'il', 'im' 'in', 'ir', 'inter', 'intra', 'macro', 'mal', 'micro', 'mis', 'mono', 'multi', 'non', 'post', 'pre', 're', 'semi', 'sub', 'super', 'tri', 'ultra', 'uni', 'un']
 suffixes_common = ['acy', 'al', 'ance', 'ence', 'dom', 'er', 'or', 'ism', 'ist', 'ity', 'ty', 'ment', 'ness', 'ship', 'sion', 'tion', 'ate', 'en', 'ify', 'fy', 'ize', 'ise', 'able', 'ible', 'al', 'esque', 'ful', 'ical', 'ic', 'ious', 'ous', 'ish', 'ive', 'less', 'y']
 
+prefixes_very_common = ['anti', 'auto', 'bi', 'circum', 'counter', 'dis', 'hyper', 'il', 'im' 'in', 'ir', 'inter', 'intra', 'macro', 'mal', 'micro', 'mis', 'mono', 'multi', 'non', 'post', 'pre', 're', 'semi', 'sub', 'super', 'ultra', 'uni', 'un']
+suffixes_very_common = ['acy', 'al', 'ance', 'ence', 'dom', 'er', 'or', 'ism', 'ist', 'ity', 'ty', 'ment', 'ness', 'ship', 'sion', 'tion', 'ate', 'en', 'ify', 'fy', 'able', 'ible', 'al', 'ful', 'ical', 'ic', 'ious', 'ous', 'ish', 'ive', 'less', 'y']
+
 prefixes_exhaustive = ['anti', 'ante', 'an', 'a', 'ab', 'ad', 'ac', 'as', 'auto', 'ben', 'bi', 'circum', 'com', 'con', 'co', 'contra', 'counter', 'de', 'dis', 'di', 'eu', 'exo', 'extra', 'extro', 'ecto', 'ex', 'fore', 'hemi', 'hyper', 'hypo', 'il', 'im' 'in', 'ir', 'inter', 'intra', 'macro', 'mal', 'micro', 'mis', 'mono', 'multi', 'non', 'ob', 'oc', 'op', 'o', 'omni', 'peri', 'poly', 'post', 'pre', 'pro', 'quad', 're', 'semi', 'sub', 'super', 'supra', 'sym', 'syn', 'trans', 'tri', 'ultra', 'uni', 'un']
 suffixes_exhaustive = ['acy', 'al', 'ance', 'ence', 'dom', 'er', 'or', 'ism', 'ist', 'ity', 'ty', 'ment', 'ness', 'ship', 'sion', 'tion', 'ate', 'en', 'ify', 'fy', 'ize', 'ise', 'able', 'ible', 'al', 'esque', 'ful', 'ical', 'ic', 'ious', 'ous', 'ish', 'ive', 'less', 'y']
 
 class PreprocessData:
-    prefixes = prefixes_common
-    suffixes = suffixes_common
+    prefixes = prefixes_exhaustive
+    suffixes = suffixes_exhaustive
+
+    # prefixes = prefixes_exhaustive
+    # suffixes = suffixes_exhaustive
 
     def __init__(self, dataset_type='wsj'):
         self.vocabulary = {}
